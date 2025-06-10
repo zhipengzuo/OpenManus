@@ -410,6 +410,7 @@ class WebSearch(BaseTool):
 
 if __name__ == "__main__":
     web_search = WebSearch()
+    # Run the web search tool directly when executing this file
     search_response = asyncio.run(
         web_search.execute(
             query="Python programming", fetch_content=True, num_results=1
