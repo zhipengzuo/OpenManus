@@ -253,7 +253,8 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                         return ToolResult(
                             error="Query is required for 'web_search' action"
                         )
-                    # Execute the web search and return results directly without browser navigation
+                    # Execute the web search tool and return results directly without
+                    # navigating in the browser
                     search_response = await self.web_search_tool.execute(
                         query=query, fetch_content=True, num_results=1
                     )
@@ -427,7 +428,7 @@ Page content:
                         },
                     }
 
-                    # Use LLM to extract content with required function calling
+                    # Use LLM's tool calling capability to extract content from the page
                     response = await self.llm.ask_tool(
                         messages,
                         tools=[extraction_function],
