@@ -3,6 +3,8 @@ import base64
 import json
 from typing import Generic, Optional, TypeVar
 
+from app.logger import logger
+
 from browser_use import Browser as BrowserUseBrowser
 from browser_use import BrowserConfig
 from browser_use.browser.context import BrowserContext, BrowserContextConfig
@@ -140,9 +142,10 @@ class BrowserUseTool(BaseTool, Generic[Context]):
 
     async def _ensure_browser_initialized(self) -> BrowserContext:
         """Ensure browser and context are initialized."""
+        logger.debug("Ensuring browser is initialized")
         if self.browser is None:
             browser_config_kwargs = {"headless": False, "disable_security": True}
-
+            
             if config.browser_config:
                 from browser_use.browser.browser import ProxySettings
 
@@ -169,9 +172,11 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                         if not isinstance(value, list) or value:
                             browser_config_kwargs[attr] = value
 
+            logger.info(f"Launching browser with config: {browser_config_kwargs}")
             self.browser = BrowserUseBrowser(BrowserConfig(**browser_config_kwargs))
 
         if self.context is None:
+            logger.debug("Creating new browser context")
             context_config = BrowserContextConfig()
 
             # if there is context config in the config, use it.
@@ -220,6 +225,19 @@ class BrowserUseTool(BaseTool, Generic[Context]):
         Returns:
             ToolResult with the action's output or error
         """
+        logger.debug(
+            "Executing browser action %s with args: url=%s index=%s text=%s scroll=%s tab_id=%s query=%s goal=%s keys=%s seconds=%s",
+            action,
+            url,
+            index,
+            text,
+            scroll_amount,
+            tab_id,
+            query,
+            goal,
+            keys,
+            seconds,
+        )
         async with self.lock:
             try:
                 context = await self._ensure_browser_initialized()
@@ -474,6 +492,7 @@ Page content:
                     return ToolResult(error=f"Unknown action: {action}")
 
             except Exception as e:
+                logger.exception(f"Browser action '{action}' failed: {e}")
                 return ToolResult(error=f"Browser action '{action}' failed: {str(e)}")
 
     async def get_current_state(
@@ -541,6 +560,7 @@ Page content:
     async def cleanup(self):
         """Clean up browser resources."""
         async with self.lock:
+            logger.debug("Cleaning up browser resources")
             if self.context is not None:
                 await self.context.close()
                 self.context = None
