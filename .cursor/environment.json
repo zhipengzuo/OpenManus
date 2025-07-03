@@ -1,5 +1,4 @@
 {
     "user": "ubuntu",
-    "install": "./.cursor/install.sh",
     "start": ""
   } 
