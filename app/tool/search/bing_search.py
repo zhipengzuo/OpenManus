@@ -141,4 +141,13 @@ class BingSearchEngine(WebSearchEngine):
 
         Returns results formatted according to SearchItem model.
         """
-        return self._search_sync(query, num_results=num_results)
+        logger.info(f"开始Bing搜索 - 查询: '{query}', 请求结果数: {num_results}")
+
+        try:
+            results = self._search_sync(query, num_results=num_results)
+            logger.info(f"Bing搜索完成 - 查询: '{query}', 返回 {len(results)} 个结果")
+            return results
+        except Exception as e:
+            logger.error(f"Bing搜索失败 - 查询: '{query}', 错误: {str(e)}")
+            logger.exception("Bing搜索异常详细信息:")
+            return []
