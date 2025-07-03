@@ -1,9 +1,5 @@
 {
-  "install": "npm install",
-  "terminals": [
-    {
-      "name": "Run Next.js",
-      "command": "npm run dev"
-    }
-  ]
-}
+    "user": "ubuntu",
+    "install": "./.cursor/install.sh",
+    "start": ""
+  } 
