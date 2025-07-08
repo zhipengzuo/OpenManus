@@ -3,6 +3,8 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
+from app.logger import logger
+
 
 class BaseTool(ABC, BaseModel):
     name: str
@@ -14,7 +16,14 @@ class BaseTool(ABC, BaseModel):
 
     async def __call__(self, **kwargs) -> Any:
         """Execute the tool with given parameters."""
-        return await self.execute(**kwargs)
+        logger.debug(f"🔧 Tool '{self.name}' called with parameters: {list(kwargs.keys())}")
+        try:
+            result = await self.execute(**kwargs)
+            logger.debug(f"✅ Tool '{self.name}' executed successfully")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Tool '{self.name}' execution failed: {e}")
+            raise
 
     @abstractmethod
     async def execute(self, **kwargs) -> Any:

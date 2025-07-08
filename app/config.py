@@ -179,25 +179,43 @@ class Config:
         if not self._initialized:
             with self._lock:
                 if not self._initialized:
+                    from app.logger import logger
+                    logger.info("🔧 Initializing application configuration")
                     self._config = None
                     self._load_initial_config()
                     self._initialized = True
+                    logger.info("✅ Configuration initialization completed")
 
     @staticmethod
     def _get_config_path() -> Path:
+        from app.logger import logger
+
         root = PROJECT_ROOT
         config_path = root / "config" / "config.toml"
         if config_path.exists():
+            logger.debug(f"📄 Using config file: {config_path}")
             return config_path
         example_path = root / "config" / "config.example.toml"
         if example_path.exists():
+            logger.warning(f"⚠️ Config file not found, using example: {example_path}")
             return example_path
+        logger.error("❌ No configuration file found in config directory")
         raise FileNotFoundError("No configuration file found in config directory")
 
     def _load_config(self) -> dict:
+        from app.logger import logger
+
         config_path = self._get_config_path()
-        with config_path.open("rb") as f:
-            return tomllib.load(f)
+        logger.debug(f"📖 Loading configuration from: {config_path}")
+
+        try:
+            with config_path.open("rb") as f:
+                config_data = tomllib.load(f)
+            logger.info(f"✅ Configuration loaded successfully from {config_path.name}")
+            return config_data
+        except Exception as e:
+            logger.error(f"❌ Error loading configuration: {e}")
+            raise
 
     def _load_initial_config(self):
         raw_config = self._load_config()

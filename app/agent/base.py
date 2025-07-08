@@ -81,6 +81,103 @@ class BaseAgent(BaseModel, ABC):
         finally:
             self.state = previous_state  # Revert to previous state
 
+    async def run(self, request: Optional[str] = None) -> str:
+        """Execute the agent's main loop asynchronously.
+
+        Args:
+            request: Optional initial user request to process.
+
+        Returns:
+            A string summarizing the execution results.
+
+        Raises:
+            RuntimeError: If the agent is not in IDLE state at start.
+        """
+        logger.info(f"🚀 Starting agent '{self.name}' execution")
+
+        if self.state != AgentState.IDLE:
+            logger.error(f"❌ Cannot run agent '{self.name}' from state: {self.state}")
+            raise RuntimeError(f"Cannot run agent from state: {self.state}")
+
+        if request:
+            logger.info(f"📝 Adding user request to memory: '{request[:100]}{'...' if len(request) > 100 else ''}'")
+            self.update_memory("user", request)
+
+        results: List[str] = []
+        logger.info(f"🔄 Starting execution loop (max {self.max_steps} steps)")
+
+        async with self.state_context(AgentState.RUNNING):
+            while (
+                self.current_step < self.max_steps and self.state != AgentState.FINISHED
+            ):
+                self.current_step += 1
+                logger.info(f"📍 Executing step {self.current_step}/{self.max_steps}")
+
+                try:
+                    step_result = await self.step()
+                    logger.debug(f"✅ Step {self.current_step} completed: {step_result[:200]}{'...' if len(step_result) > 200 else ''}")
+
+                    # Check for stuck state
+                    if self.is_stuck():
+                        logger.warning(f"🔄 Agent '{self.name}' appears to be stuck, applying mitigation strategy")
+                        self.handle_stuck_state()
+
+                    results.append(f"Step {self.current_step}: {step_result}")
+
+                except Exception as e:
+                    logger.error(f"❌ Error in step {self.current_step}: {e}", exc_info=True)
+                    results.append(f"Step {self.current_step}: Error - {str(e)}")
+                    break
+
+            if self.current_step >= self.max_steps:
+                logger.warning(f"⏰ Agent '{self.name}' reached max steps ({self.max_steps})")
+                self.current_step = 0
+                self.state = AgentState.IDLE
+                results.append(f"Terminated: Reached max steps ({self.max_steps})")
+
+        logger.info("🧹 Performing final cleanup...")
+        await SANDBOX_CLIENT.cleanup()
+
+        final_result = "\n".join(results) if results else "No steps executed"
+        logger.info(f"✅ Agent '{self.name}' execution completed with {len(results)} steps")
+        return final_result
+
+    @abstractmethod
+    async def step(self) -> str:
+        """Execute a single step in the agent's workflow.
+
+        Must be implemented by subclasses to define specific behavior.
+        """
+
+    def handle_stuck_state(self):
+        """Handle stuck state by adding a prompt to change strategy"""
+        stuck_prompt = "\
+        Observed duplicate responses. Consider new strategies and avoid repeating ineffective paths already attempted."
+        self.next_step_prompt = f"{stuck_prompt}\n{self.next_step_prompt}"
+        logger.warning(f"🔄 Agent '{self.name}' detected stuck state. Added mitigation prompt")
+
+    def is_stuck(self) -> bool:
+        """Check if the agent is stuck in a loop by detecting duplicate content"""
+        if len(self.memory.messages) < 2:
+            return False
+
+        last_message = self.memory.messages[-1]
+        if not last_message.content:
+            return False
+
+        # Count identical content occurrences
+        duplicate_count = sum(
+            1
+            for msg in reversed(self.memory.messages[:-1])
+            if msg.role == "assistant" and msg.content == last_message.content
+        )
+
+        is_stuck = duplicate_count >= self.duplicate_threshold
+        if is_stuck:
+            logger.debug(f"🔍 Stuck state detected: {duplicate_count} duplicate responses")
+
+        return is_stuck
+
     def update_memory(
         self,
         role: ROLE_TYPE,  # type: ignore
@@ -99,6 +196,8 @@ class BaseAgent(BaseModel, ABC):
         Raises:
             ValueError: If the role is unsupported.
         """
+        logger.debug(f"💭 Adding {role} message to agent '{self.name}' memory: '{content[:100]}{'...' if len(content) > 100 else ''}'")
+
         message_map = {
             "user": Message.user_message,
             "system": Message.system_message,
@@ -107,83 +206,15 @@ class BaseAgent(BaseModel, ABC):
         }
 
         if role not in message_map:
+            logger.error(f"❌ Unsupported message role: {role}")
             raise ValueError(f"Unsupported message role: {role}")
 
         # Create message with appropriate parameters based on role
         kwargs = {"base64_image": base64_image, **(kwargs if role == "tool" else {})}
-        self.memory.add_message(message_map[role](content, **kwargs))
+        message = message_map[role](content, **kwargs)
+        self.memory.add_message(message)
 
-    async def run(self, request: Optional[str] = None) -> str:
-        """Execute the agent's main loop asynchronously.
-
-        Args:
-            request: Optional initial user request to process.
-
-        Returns:
-            A string summarizing the execution results.
-
-        Raises:
-            RuntimeError: If the agent is not in IDLE state at start.
-        """
-        if self.state != AgentState.IDLE:
-            raise RuntimeError(f"Cannot run agent from state: {self.state}")
-
-        if request:
-            self.update_memory("user", request)
-
-        results: List[str] = []
-        async with self.state_context(AgentState.RUNNING):
-            while (
-                self.current_step < self.max_steps and self.state != AgentState.FINISHED
-            ):
-                self.current_step += 1
-                logger.info(f"Executing step {self.current_step}/{self.max_steps}")
-                step_result = await self.step()
-
-                # Check for stuck state
-                if self.is_stuck():
-                    self.handle_stuck_state()
-
-                results.append(f"Step {self.current_step}: {step_result}")
-
-            if self.current_step >= self.max_steps:
-                self.current_step = 0
-                self.state = AgentState.IDLE
-                results.append(f"Terminated: Reached max steps ({self.max_steps})")
-        await SANDBOX_CLIENT.cleanup()
-        return "\n".join(results) if results else "No steps executed"
-
-    @abstractmethod
-    async def step(self) -> str:
-        """Execute a single step in the agent's workflow.
-
-        Must be implemented by subclasses to define specific behavior.
-        """
-
-    def handle_stuck_state(self):
-        """Handle stuck state by adding a prompt to change strategy"""
-        stuck_prompt = "\
-        Observed duplicate responses. Consider new strategies and avoid repeating ineffective paths already attempted."
-        self.next_step_prompt = f"{stuck_prompt}\n{self.next_step_prompt}"
-        logger.warning(f"Agent detected stuck state. Added prompt: {stuck_prompt}")
-
-    def is_stuck(self) -> bool:
-        """Check if the agent is stuck in a loop by detecting duplicate content"""
-        if len(self.memory.messages) < 2:
-            return False
-
-        last_message = self.memory.messages[-1]
-        if not last_message.content:
-            return False
-
-        # Count identical content occurrences
-        duplicate_count = sum(
-            1
-            for msg in reversed(self.memory.messages[:-1])
-            if msg.role == "assistant" and msg.content == last_message.content
-        )
-
-        return duplicate_count >= self.duplicate_threshold
+        logger.debug(f"✅ Message added to memory. Total messages: {len(self.memory.messages)}")
 
     @property
     def messages(self) -> List[Message]:

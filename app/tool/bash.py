@@ -4,6 +4,7 @@ from typing import Optional
 
 from app.exceptions import ToolError
 from app.tool.base import BaseTool, CLIResult
+from app.logger import logger
 
 
 _BASH_DESCRIPTION = """Execute a bash command in the terminal.
@@ -27,11 +28,14 @@ class _BashSession:
     def __init__(self):
         self._started = False
         self._timed_out = False
+        logger.debug("🐚 Bash session initialized")
 
     async def start(self):
         if self._started:
+            logger.debug("🔄 Bash session already started")
             return
 
+        logger.debug("🚀 Starting new bash session")
         self._process = await asyncio.create_subprocess_shell(
             self.command,
             preexec_fn=os.setsid,
@@ -43,25 +47,34 @@ class _BashSession:
         )
 
         self._started = True
+        logger.info("✅ Bash session started successfully")
 
     def stop(self):
         """Terminate the bash shell."""
         if not self._started:
+            logger.error("❌ Cannot stop bash session: not started")
             raise ToolError("Session has not started.")
         if self._process.returncode is not None:
+            logger.debug("🔄 Bash process already terminated")
             return
+        logger.info("🛑 Terminating bash session")
         self._process.terminate()
 
     async def run(self, command: str):
         """Execute a command in the bash shell."""
+        logger.info(f"🐚 Executing bash command: {command}")
+
         if not self._started:
+            logger.error("❌ Bash session not started")
             raise ToolError("Session has not started.")
         if self._process.returncode is not None:
+            logger.warning(f"⚠️ Bash process exited with code {self._process.returncode}")
             return CLIResult(
                 system="tool must be restarted",
                 error=f"bash has exited with returncode {self._process.returncode}",
             )
         if self._timed_out:
+            logger.error(f"⏰ Bash session timed out after {self._timeout} seconds")
             raise ToolError(
                 f"timed out: bash has not returned in {self._timeout} seconds and must be restarted",
             )
@@ -72,6 +85,7 @@ class _BashSession:
         assert self._process.stderr
 
         # send command to the process
+        logger.debug(f"📤 Sending command to bash: {command}")
         self._process.stdin.write(
             command.encode() + f"; echo '{self._sentinel}'\n".encode()
         )
@@ -80,6 +94,7 @@ class _BashSession:
         # read output from the process, until the sentinel is found
         try:
             async with asyncio.timeout(self._timeout):
+                logger.debug(f"⏳ Waiting for command output (timeout: {self._timeout}s)")
                 while True:
                     await asyncio.sleep(self._output_delay)
                     # if we read directly from stdout/stderr, it will wait forever for
@@ -90,9 +105,11 @@ class _BashSession:
                     if self._sentinel in output:
                         # strip the sentinel and break
                         output = output[: output.index(self._sentinel)]
+                        logger.debug("✅ Command output received, sentinel found")
                         break
         except asyncio.TimeoutError:
             self._timed_out = True
+            logger.error(f"⏰ Bash command timed out after {self._timeout} seconds")
             raise ToolError(
                 f"timed out: bash has not returned in {self._timeout} seconds and must be restarted",
             ) from None
@@ -110,7 +127,13 @@ class _BashSession:
         self._process.stdout._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
         self._process.stderr._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
 
-        return CLIResult(output=output, error=error)
+        result = CLIResult(output=output, error=error)
+        if error:
+            logger.warning(f"⚠️ Bash command completed with stderr: {error}")
+        else:
+            logger.info("✅ Bash command completed successfully")
+
+        return result
 
 
 class Bash(BaseTool):
@@ -134,7 +157,10 @@ class Bash(BaseTool):
     async def execute(
         self, command: str | None = None, restart: bool = False, **kwargs
     ) -> CLIResult:
+        logger.debug(f"🐚 Bash tool execute called - restart: {restart}, command: {command}")
+
         if restart:
+            logger.info("🔄 Restarting bash session")
             if self._session:
                 self._session.stop()
             self._session = _BashSession()
@@ -143,12 +169,20 @@ class Bash(BaseTool):
             return CLIResult(system="tool has been restarted.")
 
         if self._session is None:
+            logger.info("🚀 Creating new bash session")
             self._session = _BashSession()
             await self._session.start()
 
         if command is not None:
-            return await self._session.run(command)
+            try:
+                result = await self._session.run(command)
+                logger.debug(f"📄 Bash command result: output_len={len(result.output or '')}, error_len={len(result.error or '')}")
+                return result
+            except Exception as e:
+                logger.error(f"❌ Error executing bash command: {e}")
+                raise
 
+        logger.error("❌ No command provided to bash tool")
         raise ToolError("no command provided.")
 
 

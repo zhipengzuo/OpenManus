@@ -1,6 +1,7 @@
 import asyncio
 import json
 from typing import Any, List, Optional, Union
+import time
 
 from pydantic import Field
 
@@ -38,12 +39,16 @@ class ToolCallAgent(ReActAgent):
 
     async def think(self) -> bool:
         """Process current state and decide next actions using tools"""
+        logger.debug(f"🤔 Agent '{self.name}' starting think phase")
+
         if self.next_step_prompt:
             user_msg = Message.user_message(self.next_step_prompt)
             self.messages += [user_msg]
+            logger.debug(f"📝 Added next step prompt to messages")
 
         try:
             # Get response with tool options
+            logger.debug(f"🔧 Requesting LLM response with {len(self.available_tools.tools)} available tools")
             response = await self.llm.ask_tool(
                 messages=self.messages,
                 system_msgs=(
@@ -54,7 +59,9 @@ class ToolCallAgent(ReActAgent):
                 tools=self.available_tools.to_params(),
                 tool_choice=self.tool_choices,
             )
+            logger.debug("✅ LLM response received successfully")
         except ValueError:
+            logger.error("❌ ValueError in LLM request")
             raise
         except Exception as e:
             # Check if this is a RetryError containing TokenLimitExceeded
@@ -70,6 +77,7 @@ class ToolCallAgent(ReActAgent):
                 )
                 self.state = AgentState.FINISHED
                 return False
+            logger.error(f"❌ Unexpected error in think phase: {e}", exc_info=True)
             raise
 
         self.tool_calls = tool_calls = (
@@ -83,13 +91,13 @@ class ToolCallAgent(ReActAgent):
             f"🛠️ {self.name} selected {len(tool_calls) if tool_calls else 0} tools to use"
         )
         if tool_calls:
-            logger.info(
-                f"🧰 Tools being prepared: {[call.function.name for call in tool_calls]}"
-            )
-            logger.info(f"🔧 Tool arguments: {tool_calls[0].function.arguments}")
+            tool_names = [call.function.name for call in tool_calls]
+            logger.info(f"🧰 Tools being prepared: {tool_names}")
+            logger.debug(f"🔧 Tool arguments: {tool_calls[0].function.arguments}")
 
         try:
             if response is None:
+                logger.error("❌ No response received from the LLM")
                 raise RuntimeError("No response received from the LLM")
 
             # Handle different tool_choices modes
@@ -110,15 +118,21 @@ class ToolCallAgent(ReActAgent):
                 else Message.assistant_message(content)
             )
             self.memory.add_message(assistant_msg)
+            logger.debug("💭 Assistant message added to memory")
 
             if self.tool_choices == ToolChoice.REQUIRED and not self.tool_calls:
+                logger.warning("⚠️ Tool call required but none provided")
                 return True  # Will be handled in act()
 
             # For 'auto' mode, continue with content if no commands but content exists
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
-                return bool(content)
+                has_content = bool(content)
+                logger.debug(f"🔍 AUTO mode - content available: {has_content}")
+                return has_content
 
-            return bool(self.tool_calls)
+            has_tool_calls = bool(self.tool_calls)
+            logger.debug(f"✅ Think phase completed - tool calls available: {has_tool_calls}")
+            return has_tool_calls
         except Exception as e:
             logger.error(f"🚨 Oops! The {self.name}'s thinking process hit a snag: {e}")
             self.memory.add_message(
@@ -130,22 +144,33 @@ class ToolCallAgent(ReActAgent):
 
     async def act(self) -> str:
         """Execute tool calls and handle their results"""
+        logger.debug(f"🎬 Agent '{self.name}' starting act phase")
+
         if not self.tool_calls:
             if self.tool_choices == ToolChoice.REQUIRED:
+                logger.error("❌ Tool calls required but none provided")
                 raise ValueError(TOOL_CALL_REQUIRED)
 
             # Return last message content if no tool calls
-            return self.messages[-1].content or "No content or commands to execute"
+            last_content = self.messages[-1].content or "No content or commands to execute"
+            logger.debug("📄 No tool calls, returning last message content")
+            return last_content
 
+        logger.info(f"🔨 Executing {len(self.tool_calls)} tool call(s)")
         results = []
-        for command in self.tool_calls:
+        for i, command in enumerate(self.tool_calls, 1):
+            logger.debug(f"🔧 Executing tool {i}/{len(self.tool_calls)}: {command.function.name}")
+
             # Reset base64_image for each tool call
             self._current_base64_image = None
 
             result = await self.execute_tool(command)
 
             if self.max_observe:
+                original_length = len(result)
                 result = result[: self.max_observe]
+                if original_length > self.max_observe:
+                    logger.debug(f"📏 Tool result truncated from {original_length} to {self.max_observe} characters")
 
             logger.info(
                 f"🎯 Tool '{command.function.name}' completed its mission! Result: {result}"
@@ -159,26 +184,38 @@ class ToolCallAgent(ReActAgent):
                 base64_image=self._current_base64_image,
             )
             self.memory.add_message(tool_msg)
+            logger.debug(f"💾 Tool result saved to memory")
             results.append(result)
 
-        return "\n\n".join(results)
+        final_result = "\n\n".join(results)
+        logger.info(f"✅ Act phase completed successfully with {len(results)} results")
+        return final_result
 
     async def execute_tool(self, command: ToolCall) -> str:
         """Execute a single tool call with robust error handling"""
+        logger.debug(f"⚡ Executing tool: {command.function.name}")
+
         if not command or not command.function or not command.function.name:
+            logger.error("❌ Invalid command format")
             return "Error: Invalid command format"
 
         name = command.function.name
         if name not in self.available_tools.tool_map:
+            logger.error(f"❌ Unknown tool '{name}'")
             return f"Error: Unknown tool '{name}'"
 
         try:
             # Parse arguments
-            args = json.loads(command.function.arguments or "{}")
+            args_str = command.function.arguments or "{}"
+            logger.debug(f"📋 Parsing tool arguments: {args_str[:200]}{'...' if len(args_str) > 200 else ''}")
+            args = json.loads(args_str)
 
             # Execute the tool
             logger.info(f"🔧 Activating tool: '{name}'...")
+            start_time = time.time()
             result = await self.available_tools.execute(name=name, tool_input=args)
+            execution_time = time.time() - start_time
+            logger.debug(f"⏱️ Tool '{name}' executed in {execution_time:.2f} seconds")
 
             # Handle special tools
             await self._handle_special_tool(name=name, result=result)
@@ -187,6 +224,7 @@ class ToolCallAgent(ReActAgent):
             if hasattr(result, "base64_image") and result.base64_image:
                 # Store the base64_image for later use in tool_message
                 self._current_base64_image = result.base64_image
+                logger.debug(f"🖼️ Tool '{name}' returned base64 image data")
 
             # Format result for display (standard case)
             observation = (
@@ -195,6 +233,7 @@ class ToolCallAgent(ReActAgent):
                 else f"Cmd `{name}` completed with no output"
             )
 
+            logger.debug(f"✅ Tool '{name}' execution completed successfully")
             return observation
         except json.JSONDecodeError:
             error_msg = f"Error parsing arguments for {name}: Invalid JSON format"
