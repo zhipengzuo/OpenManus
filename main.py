@@ -5,6 +5,7 @@ from app.logger import logger
 
 
 async def main():
+    logger.info("🚀 OpenManus application starting...")
     # Create and initialize Manus agent
     agent = await Manus.create()
     try:
