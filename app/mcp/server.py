@@ -43,6 +43,7 @@ class MCPServer:
         # Define the async function to be registered
         async def tool_method(**kwargs):
             logger.info(f"Executing {tool_name}: {kwargs}")
+            # Invoke the registered tool with the provided arguments
             result = await tool.execute(**kwargs)
 
             logger.info(f"Result of {tool_name}: {result}")
