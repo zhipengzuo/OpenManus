@@ -43,7 +43,7 @@ class ToolCallAgent(ReActAgent):
             self.messages += [user_msg]
 
         try:
-            # Get response with tool options
+            # Call the LLM with available tools to determine the next action
             response = await self.llm.ask_tool(
                 messages=self.messages,
                 system_msgs=(
@@ -176,7 +176,7 @@ class ToolCallAgent(ReActAgent):
             # Parse arguments
             args = json.loads(command.function.arguments or "{}")
 
-            # Execute the tool
+            # Execute the selected tool with provided arguments
             logger.info(f"🔧 Activating tool: '{name}'...")
             result = await self.available_tools.execute(name=name, tool_input=args)
 

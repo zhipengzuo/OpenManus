@@ -173,7 +173,7 @@ class PlanningFlow(BaseFlow):
                     # Ensure plan_id is set correctly and execute the tool
                     args["plan_id"] = self.active_plan_id
 
-                    # Execute the tool via ToolCollection instead of directly
+                    # Execute the planning tool with the parsed arguments
                     result = await self.planning_tool.execute(**args)
 
                     logger.info(f"Plan creation result: {str(result)}")
@@ -182,7 +182,7 @@ class PlanningFlow(BaseFlow):
         # If execution reached here, create a default plan
         logger.warning("Creating default plan")
 
-        # Create default plan using the ToolCollection
+        # Create a default plan by invoking the planning tool
         await self.planning_tool.execute(
             **{
                 "command": "create",
@@ -230,6 +230,7 @@ class PlanningFlow(BaseFlow):
 
                     # Mark current step as in_progress
                     try:
+                        # Mark the step as in progress using the planning tool
                         await self.planning_tool.execute(
                             command="mark_step",
                             plan_id=self.active_plan_id,
@@ -291,7 +292,7 @@ class PlanningFlow(BaseFlow):
             return
 
         try:
-            # Mark the step as completed
+            # Mark the step as completed via the planning tool
             await self.planning_tool.execute(
                 command="mark_step",
                 plan_id=self.active_plan_id,
@@ -319,6 +320,7 @@ class PlanningFlow(BaseFlow):
     async def _get_plan_text(self) -> str:
         """Get the current plan as formatted text."""
         try:
+            # Retrieve the current plan text via the planning tool
             result = await self.planning_tool.execute(
                 command="get", plan_id=self.active_plan_id
             )

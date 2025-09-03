@@ -154,5 +154,6 @@ class Bash(BaseTool):
 
 if __name__ == "__main__":
     bash = Bash()
+    # Example usage: execute a simple command through the Bash tool
     rst = asyncio.run(bash.execute("ls -l"))
     print(rst)
